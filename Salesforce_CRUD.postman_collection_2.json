@@ -1,0 +1,550 @@
+{
+  "info": {
+    "name": "Salesforce REST CRUD",
+    "description": "CRUD operations against Salesforce sObjects, with pm assertions on every request. Set the collection variables (instance_url, client_id, client_secret, api_version), then run the requests top to bottom or use Run collection.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      { "key": "token", "value": "{{access_token}}", "type": "string" }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Collection-level pre-request: runs before EVERY request",
+          "const noTokenNeeded = ['0. Get Access Token (Client Credentials)', 'Utility: List API Versions'];",
+          "if (!noTokenNeeded.includes(pm.info.requestName)) {",
+          "  pm.test('[Pre-check] access_token variable is set', () => {",
+          "    pm.expect(pm.collectionVariables.get('access_token'), 'Run request 0 first').to.be.a('string').and.not.empty;",
+          "  });",
+          "}"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Collection-level test: runs after EVERY request",
+          "pm.test('[Common] Response time is under 5000 ms', () => {",
+          "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+          "});",
+          "pm.test('[Common] Not an auth failure (401)', () => {",
+          "  pm.expect(pm.response.code, 'Token missing or expired - re-run request 0').to.not.eql(401);",
+          "});",
+          "if (pm.response.code >= 400) {",
+          "  console.log('Error response from ' + pm.info.requestName + ':', pm.response.text());",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    { "key": "instance_url", "value": "https://yourdomain.my.salesforce.com" },
+    { "key": "api_version", "value": "v62.0" },
+    { "key": "client_id", "value": "" },
+    { "key": "client_secret", "value": "" },
+    { "key": "access_token", "value": "" },
+    { "key": "sobject", "value": "Account" },
+    { "key": "record_id", "value": "" },
+    { "key": "created_payload", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "0. Get Access Token (Client Credentials)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status code is 200', () => {",
+              "  pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test('Response is JSON', () => {",
+              "  pm.response.to.be.json;",
+              "});",
+              "",
+              "const res = pm.response.json();",
+              "",
+              "pm.test('No OAuth error returned', () => {",
+              "  pm.expect(res, res.error_description).to.not.have.property('error');",
+              "});",
+              "",
+              "pm.test('access_token is present and non-empty', () => {",
+              "  pm.expect(res).to.have.property('access_token');",
+              "  pm.expect(res.access_token).to.be.a('string').and.not.empty;",
+              "});",
+              "",
+              "pm.test('token_type is Bearer', () => {",
+              "  pm.expect(res.token_type).to.eql('Bearer');",
+              "});",
+              "",
+              "pm.test('instance_url is an https URL', () => {",
+              "  pm.expect(res.instance_url).to.be.a('string');",
+              "  pm.expect(res.instance_url.startsWith('https://')).to.be.true;",
+              "});",
+              "",
+              "pm.test('issued_at is a valid recent timestamp', () => {",
+              "  const issued = Number(res.issued_at);",
+              "  pm.expect(issued).to.be.a('number').and.not.NaN;",
+              "  pm.expect(Math.abs(Date.now() - issued)).to.be.below(10 * 60 * 1000);",
+              "});",
+              "",
+              "if (res.access_token) {",
+              "  pm.collectionVariables.set('access_token', res.access_token);",
+              "  pm.collectionVariables.set('instance_url', res.instance_url);",
+              "} else {",
+              "  // Stop the Collection Runner - nothing else can work without a token",
+              "  pm.execution.setNextRequest(null);",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/x-www-form-urlencoded" }
+        ],
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            { "key": "grant_type", "value": "client_credentials" },
+            { "key": "client_id", "value": "{{client_id}}" },
+            { "key": "client_secret", "value": "{{client_secret}}" }
+          ]
+        },
+        "url": "{{instance_url}}/services/oauth2/token"
+      }
+    },
+    {
+      "name": "1. Create Record",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const sent = JSON.parse(pm.request.body.raw);",
+              "",
+              "pm.test('Status code is 201 Created', () => {",
+              "  pm.response.to.have.status(201);",
+              "});",
+              "",
+              "pm.test('Response is JSON', () => {",
+              "  pm.response.to.be.json;",
+              "});",
+              "",
+              "const res = pm.response.json();",
+              "",
+              "pm.test('success flag is true', () => {",
+              "  pm.expect(res.success).to.be.true;",
+              "});",
+              "",
+              "pm.test('errors array is empty', () => {",
+              "  pm.expect(res.errors).to.be.an('array').that.is.empty;",
+              "});",
+              "",
+              "pm.test('id is a valid 18-character Salesforce Id', () => {",
+              "  pm.expect(res.id).to.match(/^[a-zA-Z0-9]{18}$/);",
+              "});",
+              "",
+              "if (pm.collectionVariables.get('sobject') === 'Account') {",
+              "  pm.test('id has the Account key prefix 001', () => {",
+              "    pm.expect(res.id.substring(0, 3)).to.eql('001');",
+              "  });",
+              "}",
+              "",
+              "if (res.id) {",
+              "  pm.collectionVariables.set('record_id', res.id);",
+              "  // Save what we sent so later requests can compare against it",
+              "  pm.collectionVariables.set('created_payload', JSON.stringify(sent));",
+              "} else {",
+              "  // Stop the runner - read/update/delete depend on record_id",
+              "  pm.execution.setNextRequest(null);",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"Name\": \"Acme Ltd\",\n  \"Industry\": \"Manufacturing\",\n  \"Phone\": \"01234 567890\"\n}"
+        },
+        "url": "{{instance_url}}/services/data/{{api_version}}/sobjects/{{sobject}}/"
+      }
+    },
+    {
+      "name": "2a. Read Record by Id",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('[Pre-check] record_id variable is set', () => {",
+              "  pm.expect(pm.collectionVariables.get('record_id'), 'Run request 1 first').to.be.a('string').and.not.empty;",
+              "});"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status code is 200', () => {",
+              "  pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test('Response is JSON', () => {",
+              "  pm.response.to.be.json;",
+              "});",
+              "",
+              "const res = pm.response.json();",
+              "const recordId = pm.collectionVariables.get('record_id');",
+              "const sobject = pm.collectionVariables.get('sobject');",
+              "",
+              "pm.test('Returned Id matches record_id', () => {",
+              "  pm.expect(res.Id).to.eql(recordId);",
+              "});",
+              "",
+              "pm.test('attributes.type matches the sObject', () => {",
+              "  pm.expect(res.attributes).to.be.an('object');",
+              "  pm.expect(res.attributes.type).to.eql(sobject);",
+              "});",
+              "",
+              "pm.test('attributes.url points to this record', () => {",
+              "  pm.expect(res.attributes.url).to.include('/sobjects/' + sobject + '/' + recordId);",
+              "});",
+              "",
+              "// Every field requested in ?fields= must come back",
+              "const requested = pm.request.url.query.get('fields').split(',').map(f => f.trim());",
+              "pm.test('All requested fields are present: ' + requested.join(', '), () => {",
+              "  requested.forEach(f => pm.expect(res, 'missing field ' + f).to.have.property(f));",
+              "});",
+              "",
+              "// Values must match what request 1 created (run this before request 3)",
+              "const createdRaw = pm.collectionVariables.get('created_payload');",
+              "if (createdRaw) {",
+              "  const created = JSON.parse(createdRaw);",
+              "  Object.keys(created).filter(k => requested.includes(k)).forEach(k => {",
+              "    pm.test('Field ' + k + ' equals the created value', () => {",
+              "      pm.expect(res[k]).to.eql(created[k]);",
+              "    });",
+              "  });",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{instance_url}}/services/data/{{api_version}}/sobjects/{{sobject}}/{{record_id}}?fields=Id,Name,Industry,Phone",
+          "host": ["{{instance_url}}"],
+          "path": ["services", "data", "{{api_version}}", "sobjects", "{{sobject}}", "{{record_id}}"],
+          "query": [
+            { "key": "fields", "value": "Id,Name,Industry,Phone" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "2b. Read Records by SOQL Query",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status code is 200', () => {",
+              "  pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test('Response is JSON', () => {",
+              "  pm.response.to.be.json;",
+              "});",
+              "",
+              "const res = pm.response.json();",
+              "",
+              "pm.test('Response has totalSize, done and records', () => {",
+              "  pm.expect(res.totalSize).to.be.a('number');",
+              "  pm.expect(res.done).to.be.a('boolean');",
+              "  pm.expect(res.records).to.be.an('array');",
+              "});",
+              "",
+              "pm.test('No more than 10 records returned (LIMIT 10)', () => {",
+              "  pm.expect(res.records.length).to.be.at.most(10);",
+              "});",
+              "",
+              "pm.test('If done is true, records count equals totalSize', () => {",
+              "  if (res.done) {",
+              "    pm.expect(res.records.length).to.eql(res.totalSize);",
+              "  } else {",
+              "    pm.expect(res.nextRecordsUrl).to.be.a('string');",
+              "  }",
+              "});",
+              "",
+              "pm.test('Every record is an Account with Id and Name', () => {",
+              "  res.records.forEach(r => {",
+              "    pm.expect(r.attributes.type).to.eql('Account');",
+              "    pm.expect(r).to.have.property('Id');",
+              "    pm.expect(r).to.have.property('Name');",
+              "  });",
+              "});",
+              "",
+              "// The record from request 1 is the newest Account, so it should be in the results",
+              "const recordId = pm.collectionVariables.get('record_id');",
+              "if (recordId) {",
+              "  pm.test('Record created in request 1 appears in results', () => {",
+              "    const ids = res.records.map(r => r.Id);",
+              "    pm.expect(ids).to.include(recordId);",
+              "  });",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{instance_url}}/services/data/{{api_version}}/query/?q=SELECT Id, Name, Industry FROM Account ORDER BY CreatedDate DESC LIMIT 10",
+          "host": ["{{instance_url}}"],
+          "path": ["services", "data", "{{api_version}}", "query", ""],
+          "query": [
+            { "key": "q", "value": "SELECT Id, Name, Industry FROM Account ORDER BY CreatedDate DESC LIMIT 10" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "3. Update Record",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('[Pre-check] record_id variable is set', () => {",
+              "  pm.expect(pm.collectionVariables.get('record_id'), 'Run request 1 first').to.be.a('string').and.not.empty;",
+              "});"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const sent = JSON.parse(pm.request.body.raw);",
+              "",
+              "pm.test('Status code is 204 No Content', () => {",
+              "  pm.response.to.have.status(204);",
+              "});",
+              "",
+              "pm.test('Response body is empty', () => {",
+              "  pm.expect(pm.response.text()).to.be.empty;",
+              "});",
+              "",
+              "// Verify the change really happened: re-read the record from Salesforce",
+              "const base = pm.collectionVariables.get('instance_url') + '/services/data/' + pm.collectionVariables.get('api_version');",
+              "const url = base + '/sobjects/' + pm.collectionVariables.get('sobject') + '/' + pm.collectionVariables.get('record_id') + '?fields=' + Object.keys(sent).join(',');",
+              "",
+              "pm.sendRequest({",
+              "  url: url,",
+              "  method: 'GET',",
+              "  header: { Authorization: 'Bearer ' + pm.collectionVariables.get('access_token') }",
+              "}, (err, verify) => {",
+              "  pm.test('Verification GET succeeded', () => {",
+              "    pm.expect(err).to.be.null;",
+              "    pm.expect(verify.code).to.eql(200);",
+              "  });",
+              "  const record = verify.json();",
+              "  Object.keys(sent).forEach(k => {",
+              "    pm.test('Field ' + k + ' was updated to ' + JSON.stringify(sent[k]), () => {",
+              "      pm.expect(record[k]).to.eql(sent[k]);",
+              "    });",
+              "  });",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PATCH",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"Industry\": \"Technology\"\n}"
+        },
+        "url": "{{instance_url}}/services/data/{{api_version}}/sobjects/{{sobject}}/{{record_id}}"
+      }
+    },
+    {
+      "name": "4. Delete Record",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('[Pre-check] record_id variable is set', () => {",
+              "  pm.expect(pm.collectionVariables.get('record_id'), 'Run request 1 first').to.be.a('string').and.not.empty;",
+              "});"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status code is 204 No Content', () => {",
+              "  pm.response.to.have.status(204);",
+              "});",
+              "",
+              "pm.test('Response body is empty', () => {",
+              "  pm.expect(pm.response.text()).to.be.empty;",
+              "});",
+              "",
+              "// Verify the record is really gone: a GET should now return 404",
+              "const url = pm.collectionVariables.get('instance_url') + '/services/data/' + pm.collectionVariables.get('api_version') + '/sobjects/' + pm.collectionVariables.get('sobject') + '/' + pm.collectionVariables.get('record_id');",
+              "",
+              "pm.sendRequest({",
+              "  url: url,",
+              "  method: 'GET',",
+              "  header: { Authorization: 'Bearer ' + pm.collectionVariables.get('access_token') }",
+              "}, (err, verify) => {",
+              "  pm.test('Record no longer exists (GET returns 404)', () => {",
+              "    pm.expect(err).to.be.null;",
+              "    pm.expect(verify.code).to.eql(404);",
+              "  });",
+              "  pm.test('Error code is ENTITY_IS_DELETED or NOT_FOUND', () => {",
+              "    const body = verify.json();",
+              "    pm.expect(body).to.be.an('array').that.is.not.empty;",
+              "    pm.expect(['ENTITY_IS_DELETED', 'NOT_FOUND']).to.include(body[0].errorCode);",
+              "  });",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "DELETE",
+        "header": [],
+        "url": "{{instance_url}}/services/data/{{api_version}}/sobjects/{{sobject}}/{{record_id}}"
+      }
+    },
+    {
+      "name": "Utility: List API Versions",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status code is 200', () => {",
+              "  pm.response.to.have.status(200);",
+              "});",
+              "",
+              "const res = pm.response.json();",
+              "",
+              "pm.test('Returns a non-empty list of versions', () => {",
+              "  pm.expect(res).to.be.an('array').that.is.not.empty;",
+              "});",
+              "",
+              "pm.test('Each entry has version, label and url', () => {",
+              "  res.forEach(v => pm.expect(v).to.include.all.keys('version', 'label', 'url'));",
+              "});",
+              "",
+              "pm.test('Configured api_version is supported by this org', () => {",
+              "  const supported = res.map(v => 'v' + v.version);",
+              "  pm.expect(supported).to.include(pm.collectionVariables.get('api_version'));",
+              "});",
+              "",
+              "console.log('Latest supported version: v' + res[res.length - 1].version);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "GET",
+        "header": [],
+        "url": "{{instance_url}}/services/data/"
+      }
+    },
+    {
+      "name": "Utility: Describe Object",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status code is 200', () => {",
+              "  pm.response.to.have.status(200);",
+              "});",
+              "",
+              "const res = pm.response.json();",
+              "const sobject = pm.collectionVariables.get('sobject');",
+              "",
+              "pm.test('Describe is for the configured sObject', () => {",
+              "  pm.expect(res.name).to.eql(sobject);",
+              "});",
+              "",
+              "pm.test('Object supports create, read, update and delete', () => {",
+              "  pm.expect(res.createable, 'createable').to.be.true;",
+              "  pm.expect(res.queryable, 'queryable').to.be.true;",
+              "  pm.expect(res.updateable, 'updateable').to.be.true;",
+              "  pm.expect(res.deletable, 'deletable').to.be.true;",
+              "});",
+              "",
+              "pm.test('fields array is non-empty', () => {",
+              "  pm.expect(res.fields).to.be.an('array').that.is.not.empty;",
+              "});",
+              "",
+              "// Fields used in the Create body must exist and be createable",
+              "const createFields = ['Name', 'Industry', 'Phone'];",
+              "createFields.forEach(name => {",
+              "  pm.test('Field ' + name + ' exists and is createable', () => {",
+              "    const f = res.fields.find(x => x.name === name);",
+              "    pm.expect(f, name + ' not found').to.exist;",
+              "    pm.expect(f.createable).to.be.true;",
+              "  });",
+              "});",
+              "",
+              "// Log the required fields so you know what Create must include",
+              "const required = res.fields.filter(f => f.createable && !f.nillable && !f.defaultedOnCreate).map(f => f.name);",
+              "console.log('Required fields on create:', required);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{instance_url}}/services/data/{{api_version}}/sobjects/{{sobject}}/describe"
+      }
+    }
+  ]
+}
